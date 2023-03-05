@@ -4,21 +4,8 @@ from synapses import *
 from torch import Tensor
 
 import torch
+import torch.autograd.forward_ad as fwAD
 import torch.nn as nn
-
-class StateUpdate(torch.autograd.Function):
-
-    @staticmethod
-    def forward(self,
-                ctx,
-                activations: Dict[str, Tensor],
-                energy: Dict[str, Tensor]) -> Dict[str, Tensor]:
-
-        order = list(sorted(name for name in in activations.keys()))
-        activations = [activations[name] for name in ctx.order]
-        grads = torch.autograd.grad(energy, activations, torch.ones_like(energy))[1:]
-
-        
 
 class HAM(nn.Module):
 
@@ -54,23 +41,21 @@ class HAM(nn.Module):
     def updates(self,
                 states: Dict[str, Tensor],
                 activations: Dict[str, Tensor],
-                return_energy: bool = False,
-                pin: Set[str] = set()) -> Dict[str, Tensor]:
+                return_energy: bool = False) -> Dict[str, Tensor]:
 
         # Compute energy
         energy = self.energy(states, activations)
 
-        # Get all activations that are not pinned and gradient calculation
-        unpinned = list(sorted(name for name, activation in activations.items() if name not in pin and activation.requires_grad))
-        pinned = { name for name in activations.keys() if name not in unpinned }
-        activations_unpinned = tuple(activations[name] for name in unpinned)
+        # Convert dict to list
+        order = sorted(activations.keys())
+        activations = [activations[name] for name in order]
 
         # Compute gradient, saving the graph for use in backprop.
         # I.e. jvp = backward of backward
-        grads = torch.autograd.grad(energy, activations_unpinned, torch.ones_like(energy), create_graph=True)
+        grads = torch.autograd.grad(energy, activations, torch.ones_like(energy), create_graph=True)
 
         # Map each gradient activation to its corresponding key
-        updates = { name: -grad for name, grad in zip(unpinned, grads) }
+        updates = { name: -grad for name, grad in zip(order, grads) }
 
         if return_energy:
             return updates, energy
@@ -80,9 +65,10 @@ class HAM(nn.Module):
              states: Dict[str, Tensor],
              updates: Dict[str, Tensor],
              dt: float,
-             tau: DefaultDict = defaultdict(lambda: 0.1)) -> Dict[str, Tensor]:
+             tau: DefaultDict = defaultdict(lambda: 0.1),
+             pin: Set[str] = set()) -> Dict[str, Tensor]:
         
-        return { name: state + dt/tau[name]*updates[name] if name in updates else state for name, state in states.items() }
+        return { name: state if name in pin else state + dt/tau[name]*updates[name] for name, state in states.items() }
     
     def init_states(self,
                     n_batch: int = 1,

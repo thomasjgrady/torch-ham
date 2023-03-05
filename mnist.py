@@ -62,12 +62,15 @@ for e in range(n_epochs):
 
         for d in range(depth):
             activations = model.neuron_activations(states)
-            updates, energy = model.updates(states, activations, pin={'input'}, return_energy=True)
-            states = model.step(states, updates, dt)
+            updates, energy = model.updates(states, activations, return_energy=True)
+            states = model.step(states, updates, dt, pin={'input'})
         
-        logits = states['label']
-        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1), ignore_index=-1)
-        print(f'batch = {i}, loss = {loss.item():2.8f}', end='\r',  flush=True)
+        activations = model.neuron_activations(states)
+        label = torch.log(activations['label'])
+        loss = F.nll_loss(label, y)
+        print(f'batch = {i}, loss = {loss.item():2.8f}', end='\n',  flush=True)
         loss.backward()
+        print([p.grad for p in model.parameters()])
         optim.step()
+        break
     break
