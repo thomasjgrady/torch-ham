@@ -6,6 +6,20 @@ from torch import Tensor
 import torch
 import torch.nn as nn
 
+class StateUpdate(torch.autograd.Function):
+
+    @staticmethod
+    def forward(self,
+                ctx,
+                activations: Dict[str, Tensor],
+                energy: Dict[str, Tensor]) -> Dict[str, Tensor]:
+
+        order = list(sorted(name for name in in activations.keys()))
+        activations = [activations[name] for name in ctx.order]
+        grads = torch.autograd.grad(energy, activations, torch.ones_like(energy))[1:]
+
+        
+
 class HAM(nn.Module):
 
     def __init__(self,
@@ -37,38 +51,38 @@ class HAM(nn.Module):
         synapse_energy = torch.cat([v.unsqueeze(1) for v in self.synapse_energies(activations).values()], dim=1).sum(dim=1)
         return neuron_energy + synapse_energy
 
-    def updates(self, states: Dict[str, Tensor], activations: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    def updates(self,
+                states: Dict[str, Tensor],
+                activations: Dict[str, Tensor],
+                return_energy: bool = False,
+                pin: Set[str] = set()) -> Dict[str, Tensor]:
 
         # Compute energy
         energy = self.energy(states, activations)
 
-        # Concatenate states and activations into a single list to produce the update direction
-        # Use sorting to ensure correct lookup later
-        states_and_activations = (
-            *list(map(lambda item: item[1], sorted(states.items(), key=lambda item: item[0]))),
-            *list(map(lambda item: item[1], sorted(activations.items(), key=lambda item: item[0])))
-        )
+        # Get all activations that are not pinned and gradient calculation
+        unpinned = list(sorted(name for name, activation in activations.items() if name not in pin and activation.requires_grad))
+        pinned = { name for name in activations.keys() if name not in unpinned }
+        activations_unpinned = tuple(activations[name] for name in unpinned)
 
         # Compute gradient, saving the graph for use in backprop.
         # I.e. jvp = backward of backward
-        grads = torch.autograd.grad(energy, states_and_activations, torch.ones_like(energy), create_graph=True, retain_graph=True)
-
-        # Only care about gradient w.r.t. activations
-        grad_activations = grads[-len(activations):]
+        grads = torch.autograd.grad(energy, activations_unpinned, torch.ones_like(energy), create_graph=True)
 
         # Map each gradient activation to its corresponding key
-        updates = { name: -grad_activations[i] for (i, name) in enumerate(sorted(activations.keys())) }
+        updates = { name: -grad for name, grad in zip(unpinned, grads) }
 
+        if return_energy:
+            return updates, energy
         return updates
     
     def step(self,
              states: Dict[str, Tensor],
              updates: Dict[str, Tensor],
              dt: float,
-             tau: DefaultDict = defaultdict(lambda: 0.1),
-             pin: Set[str] = set()) -> Dict[str, Tensor]:
+             tau: DefaultDict = defaultdict(lambda: 0.1)) -> Dict[str, Tensor]:
         
-        return { name: state if name in pin else state + dt/tau[name]*updates[name] for name, state in states.items() }
+        return { name: state + dt/tau[name]*updates[name] if name in updates else state for name, state in states.items() }
     
     def init_states(self,
                     n_batch: int = 1,
