@@ -20,7 +20,7 @@ class DenseSynapse(Synapse):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__()
-        self.W = nn.Parameter(torch.empty(*args, **kwargs, requires_grad=True))
+        self.W = nn.Parameter(torch.empty(*args, **kwargs))
         nn.init.xavier_normal_(self.W)
 
         s = self.W.shape
@@ -30,3 +30,6 @@ class DenseSynapse(Synapse):
     def alignment(self, *gs: Tensor) -> Tensor:
         gs = [g.view(g.shape[0], -1) for g in gs]
         return torch.einsum(self.eqn, *gs, self.W)
+
+    def forward(self, *gs):
+        return self.energy(*gs)

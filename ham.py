@@ -3,6 +3,7 @@ from neurons import *
 from synapses import *
 from torch import Tensor
 
+import itertools
 import torch
 import torch.autograd.forward_ad as fwAD
 import torch.nn as nn
@@ -32,30 +33,29 @@ class HAM(nn.Module):
             gs = [activations[neighbor] for neighbor in self.connectivity[name]]
             energies[name] = synapse.energy(*gs)
         return energies
-    
+
+    def neuron_energy(self, states: Dict[str, Tensor], activations: Dict[str, Tensor]) -> Tensor:
+        return torch.cat([v.unsqueeze(1) for v in self.neuron_energies(states, activations).values()], dim=1).sum(dim=1)
+
+    def synapse_energy(self, activations: Dict[str, Tensor]) -> Tensor:
+        return torch.cat([v.unsqueeze(1) for v in self.synapse_energies(activations).values()], dim=1).sum(dim=1)
+
     def energy(self, states: Dict[str, Tensor], activations: Dict[str, Tensor]) -> Dict[str, Tensor]:
-        neuron_energy = torch.cat([v.unsqueeze(1) for v in self.neuron_energies(states, activations).values()], dim=1).sum(dim=1)
-        synapse_energy = torch.cat([v.unsqueeze(1) for v in self.synapse_energies(activations).values()], dim=1).sum(dim=1)
-        return neuron_energy + synapse_energy
+        return self.neuron_energy(states, activations) + self.synapse_energy(activations)
 
     def updates(self,
                 states: Dict[str, Tensor],
                 activations: Dict[str, Tensor],
                 return_energy: bool = False) -> Dict[str, Tensor]:
 
-        # Compute energy
+        # Compute energy gradient
         energy = self.energy(states, activations)
-
-        # Convert dict to list
         order = sorted(activations.keys())
-        activations = [activations[name] for name in order]
-
-        # Compute gradient, saving the graph for use in backprop.
-        # I.e. jvp = backward of backward
-        grads = torch.autograd.grad(energy, activations, torch.ones_like(energy), create_graph=True)
+        acts = [activations[name] for name in order]
+        dEdg = torch.autograd.grad(energy, acts, torch.ones_like(energy), create_graph=True)
 
         # Map each gradient activation to its corresponding key
-        updates = { name: -grad for name, grad in zip(order, grads) }
+        updates = { name: -grad for name, grad in zip(order, dEdg) }
 
         if return_energy:
             return updates, energy
