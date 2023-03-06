@@ -3,9 +3,7 @@ from neurons import *
 from synapses import *
 from torch import Tensor
 
-import itertools
 import torch
-import torch.autograd.forward_ad as fwAD
 import torch.nn as nn
 
 class HAM(nn.Module):

@@ -33,3 +33,21 @@ class DenseSynapse(Synapse):
 
     def forward(self, *gs):
         return self.energy(*gs)
+
+class NetworkSynapse(Synapse):
+    """
+    A synapse with arbitrary networks all connecting to a single internal synapse.
+    """
+
+    def __init__(self,
+                 synapse: Synapse,
+                 *networks: nn.Module) -> None:
+
+        super().__init__()
+
+        self.synapse = synapse
+        self.networks = nn.ModuleList(networks)
+
+    def alignment(self, *gs: Tensor) -> Tensor:
+        gs_summarized = [network(g) for network, g in zip(self.networks, gs)]
+        return self.synapse(*gs_summarized)

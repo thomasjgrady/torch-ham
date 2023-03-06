@@ -55,3 +55,14 @@ class TanhNeuron(Neuron):
     
     def lagrangian(self, x: Tensor) -> Tensor:
         return torch.log(torch.cosh(x.view(x.shape[0], -1))).sum(dim=1, keepdim=False)
+
+class IdentityNeuron(Neuron):
+
+    def __init__(self, shape: Tuple[int]) -> None:
+        super().__init__(shape)
+
+    def activations(self, x: Tensor) -> Tensor:
+        return x
+
+    def lagrangian(self, x: Tensor) -> Tensor:
+        return torch.sum(0.5 * x.view(x.shape[0], -1)**2).sum(dim=-1)
