@@ -1,6 +1,7 @@
+from .neurons import *
+from .synapses import *
+
 from collections import defaultdict
-from neurons import *
-from synapses import *
 from torch import Tensor
 from typing import *
 
