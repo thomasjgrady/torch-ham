@@ -17,52 +17,35 @@ class Neuron(nn.Module):
         pass
 
     def energy(self, x: Tensor, g: Tensor) -> Tensor:
-        l = self.lagrangian(x)
-        return torch.mul(x.view(x.shape[0], -1), g.view(g.shape[0], -1)).sum(dim=1, keepdim=False) - l
-    
-    def init_state(self, n_batch: int = 1, std: float = 0.02, **kwargs) -> Tensor:
-        return std*torch.randn(n_batch, *self.shape, **kwargs)
-    
-class ReluNeuron(Neuron):
+        x = torch.flatten(x, start_dim=1)
+        g = torch.flatten(g, start_dim=1)
+        return torch.multiply(x, g).sum(dim=1) - self.lagrangian(x)
 
-    def __init__(self, shape: Tuple[int]) -> None:
-        super().__init__(shape)
+    def init_state(self, batch_size: int = 1, std: float = 0.02, **kwargs) -> Tensor:
+        return std*torch.randn(batch_size, *self.shape, **kwargs)
 
-    def activations(self, x: Tensor) -> Tensor:
-        return torch.relu(x)
-    
-    def lagrangian(self, x: Tensor) -> Tensor:
-        return (0.5*torch.relu(x.view(x.shape[0], -1))**2).sum(dim=1, keepdim=False)
-    
 class SoftmaxNeuron(Neuron):
 
-    def __init__(self, shape: Tuple[int]) -> None:
+    def __init__(self, shape: Tuple[int], beta: float = 1.0) -> None:
         super().__init__(shape)
+        self.beta = beta
 
     def activations(self, x: Tensor) -> Tensor:
-        return torch.softmax(x, dim=-1)
-    
+        return torch.softmax(self.beta*x, dim=-1)
+
     def lagrangian(self, x: Tensor) -> Tensor:
-        return torch.logsumexp(x.view(x.shape[0], -1), dim=1)
+        return 1/self.beta * torch.logsumexp(self.beta*x.view(x.shape[0], -1), dim=-1)
     
-class TanhNeuron(Neuron):
+class SphericalNeuron(Neuron):
 
-    def __init__(self, shape: Tuple[int]) -> None:
+    def __init__(self, shape: Tuple[int], eps=1e-6) -> None:
         super().__init__(shape)
+        self.eps = eps
 
     def activations(self, x: Tensor) -> Tensor:
-        return torch.tanh(x)
-    
-    def lagrangian(self, x: Tensor) -> Tensor:
-        return torch.log(torch.cosh(x.view(x.shape[0], -1))).sum(dim=1, keepdim=False)
-
-class IdentityNeuron(Neuron):
-
-    def __init__(self, shape: Tuple[int]) -> None:
-        super().__init__(shape)
-
-    def activations(self, x: Tensor) -> Tensor:
+        x = x - torch.mean(x, dim=-1, keepdim=True)
+        x = x / (torch.norm(x, dim=-1, keepdim=True) + self.eps)
         return x
-
+    
     def lagrangian(self, x: Tensor) -> Tensor:
-        return torch.sum(0.5 * x.view(x.shape[0], -1)**2).sum(dim=-1)
+        return torch.norm(x.view(x.shape[0], -1), dim=-1)

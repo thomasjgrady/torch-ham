@@ -1,7 +1,6 @@
 from torch import Tensor
 from typing import *
 
-import string
 import torch
 import torch.nn as nn
 
@@ -16,38 +15,19 @@ class Synapse(nn.Module):
     def energy(self, *gs: Tensor) -> Tensor:
         return -self.alignment(*gs)
     
-class DenseSynapse(Synapse):
+class HopfieldSynapse(Synapse):
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, n0: int, n1: int, n_hidden: int, beta: float = 1.0, **kwargs) -> None:
         super().__init__()
-        self.W = nn.Parameter(torch.empty(*args, **kwargs))
-        nn.init.xavier_normal_(self.W)
+        self.beta = beta
+        self.W0 = nn.Parameter(torch.empty(n0, n_hidden, **kwargs))
+        self.W1 = nn.Parameter(torch.empty(n1, n_hidden, **kwargs))
+        nn.init.normal_(self.W0, mean=0, std=0.02)
+        nn.init.normal_(self.W1, mean=0, std=0.02)
 
-        s = self.W.shape
-        d = len(s)
-        self.eqn = f"{','.join(f'z{c}' for c in string.ascii_lowercase[:d])},{string.ascii_lowercase[:d]}->z"
-
-    def alignment(self, *gs: Tensor) -> Tensor:
-        gs = [g.view(g.shape[0], -1) for g in gs]
-        return torch.einsum(self.eqn, *gs, self.W)
-
-    def forward(self, *gs):
-        return self.energy(*gs)
-
-class NetworkSynapse(Synapse):
-    """
-    A synapse with arbitrary networks all connecting to a single internal synapse.
-    """
-
-    def __init__(self,
-                 synapse: Synapse,
-                 *networks: nn.Module) -> None:
-
-        super().__init__()
-
-        self.synapse = synapse
-        self.networks = nn.ModuleList(networks)
-
-    def alignment(self, *gs: Tensor) -> Tensor:
-        gs_summarized = [network(g) for network, g in zip(self.networks, gs)]
-        return self.synapse(*gs_summarized)
+    def alignment(self, g0: Tensor, g1: Tensor) -> Tensor:
+        norm0 = torch.norm(self.W0, dim=0, keepdim=True)
+        norm1 = torch.norm(self.W1, dim=0, keepdim=True)
+        hidsig = g0 @ (self.W0 / norm0) + g1 @ (self.W1 / norm1)
+        hidlag = 1/self.beta * torch.logsumexp(self.beta*torch.flatten(hidsig, start_dim=1), dim=-1)
+        return hidlag
