@@ -13,13 +13,17 @@ class HAM(nn.Module):
     def __init__(self,
                  neurons: Mapping[str, Neuron],
                  synapses: Mapping[str, Synapse],
-                 connections: Mapping[str, List[str]]) -> None:
+                 connections: Mapping[str, List[str]],
+                 sensors: Mapping[str, nn.Module] = defaultdict(lambda: nn.Identity()),
+                 outputs: Mapping[str, nn.Module] = defaultdict(lambda: nn.Identity())) -> None:
         
         super().__init__()
 
         self.neurons = nn.ModuleDict(neurons)
         self.synapses = nn.ModuleDict(synapses)
         self.connections = connections
+        self.sensors = nn.ModuleDict({ name: sensors[name] for name in neurons.keys() })
+        self.outputs = nn.ModuleDict({ name: outputs[name] for name in neurons.keys() })
 
     def init_states(self,
                     batch_size: int = 1,
@@ -27,6 +31,12 @@ class HAM(nn.Module):
                     **kwargs) -> Dict[str, Tensor]:
         
         return { name: neuron.init_state(batch_size, std[name], **kwargs) for name, neuron in self.neurons.items() }
+
+    def input(self, data: Dict[str, Tensor]) -> Dict[str, Tensor]:
+        return { name: self.sensors[name](x) for name, x in data.items() }
+    
+    def output(self, states: Dict[str, Tensor]) -> Dict[str, Tensor]:
+        return { name: self.outputs[name](s) for name, s in states.items() }
     
     def activations(self, states: Dict[str, Tensor]) -> Dict[str, Tensor]:
         return { name: neuron.activations(states[name]) for name, neuron in self.neurons.items() }
