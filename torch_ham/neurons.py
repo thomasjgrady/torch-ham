@@ -15,11 +15,11 @@ class Neuron(nn.Module):
         super().__init__()
         self.shape = shape
 
-    def init_state(self, mean=0.0, std=0.02, **kwargs) -> Tensor:
+    def init_state(self, mean=0.0, std=0.02, batch_size: int = 1, **kwargs) -> Tensor:
         """
         Initialize the neuron state with the given mean and standard deviation.
         """
-        return std*torch.randn(self.shape, **kwargs) + mean
+        return std*torch.randn(batch_size, *self.shape, **kwargs) + mean
 
     def activations(self, x: Tensor) -> Tensor:
         """

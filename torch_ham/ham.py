@@ -30,6 +30,7 @@ class HAM(nn.Module):
     def init_states(self,
                     mean: Mapping[str, float] = defaultdict(lambda: 0.0),
                     std: Mapping[str, float] = defaultdict(lambda: 0.02),
+                    batch_size: int = 1,
                     exclude: Set[str] = set(),
                     **kwargs) -> None:
         """
@@ -38,13 +39,18 @@ class HAM(nn.Module):
         to `None` (useful to avoid extra memory allocation in training loops where
         a particular state in manually initialized).
         """
-        return { name: None if name in exclude else neuron.init_state(mean, std, **kwargs) for name, neuron in self.neurons.items() }
+        return { name: None if name in exclude else neuron.init_state(
+            mean[name],
+            std[name],
+            batch_size=batch_size,
+            **kwargs)
+        for name, neuron in self.neurons.items() }
 
     def activations(self, states: Mapping[str, Tensor]) -> Mapping[str, Tensor]:
         """
         Computes the activation of model neurons given corresponding `states`.
         """
-        return { name: neuron.activation(states[name]) for name, neuron in self.neurons.items() }
+        return { name: neuron.activations(states[name]) for name, neuron in self.neurons.items() }
 
     def neuron_energies(self, states: Mapping[str, Tensor], activations: Mapping[str, Tensor]) -> Mapping[str, Tensor]:
         """
@@ -85,7 +91,7 @@ class HAM(nn.Module):
         """
         return self.neuron_energy(states, activations) + self.synapse_energy(activations)
 
-    def grads(self, states: Mapping[str, Tensor], activations: Mapping[str, Tensor]) -> Tensor:
+    def grads(self, states: Mapping[str, Tensor], activations: Mapping[str, Tensor], create_graph=True) -> Tensor:
         """
         Computes the gradient of model energy w.r.t. `activations` using the given
         `states` and corresponding `activations`.
@@ -95,7 +101,7 @@ class HAM(nn.Module):
         synapse_energy = self.synapse_energy(activations)
         order = sorted(states.keys())
         acts = [activations[name] for name in order]
-        grads = torch.autograd.grad(synapse_energy, acts, torch.ones_like(synapse_energy), create_graph=True)
+        grads = torch.autograd.grad(synapse_energy, acts, torch.ones_like(synapse_energy), create_graph=create_graph)
         return { name: states[name] + g for name, g in zip(order, grads) }
 
     def step(self,

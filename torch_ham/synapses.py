@@ -1,5 +1,5 @@
 from .lagrangians import lagr_softmax
-from .utils import conv_kernel_from_dim
+from .utils import conv_kernel_from_dim, filter_kwargs
 from torch import Tensor
 from typing import *
 
@@ -82,7 +82,7 @@ class GenericSynapse(Synapse):
         self.f0 = f0
         self.f1 = f1
     
-    def forward(self, g0: Tensor, g1: Tensor) -> Tensor:
+    def alignment(self, g0: Tensor, g1: Tensor) -> Tensor:
         h0 = self.f0(g0)
         h1 = self.f1(g1)
         nb = h0.shape[0]
@@ -94,11 +94,12 @@ def ConvSynapse(*args, **kwargs):
     convolutional operator.
     """
     
-    kernel_size = kwargs.get('kernel_size', args[2])
+    kernel_size = kwargs['kernel_size'] if 'kernel_size' in kwargs else args[2]
     dim = len(kernel_size)
     conv = conv_kernel_from_dim(dim)
+    conv_kwargs, _ = filter_kwargs(conv.__init__, **kwargs)
 
-    return GenericSynapse(conv, nn.Identity())
+    return GenericSynapse(conv(*args, **conv_kwargs), nn.Identity())
 
 def DenseSynapse(*args, **kwargs):
     """
@@ -107,3 +108,45 @@ def DenseSynapse(*args, **kwargs):
     """
     bias = kwargs.get('bias', False)
     return GenericSynapse(nn.Linear(*args, bias=bias, **kwargs))
+
+class AttentionSynapse(Synapse):
+    """
+    Generic non-causal attention alignment.
+    """
+    def __init__(self,
+                 n_embed_q: int,
+                 n_embed_k: int,
+                 n_embed: int,
+                 n_heads: int,
+                 lagrangian: Callable = lagr_softmax,
+                 transform_q: nn.Module = nn.Identity(),
+                 transform_k: nn.Module = nn.Identity(),
+                 **kwargs) -> None:
+
+        super().__init__()
+
+        self.n_embed = n_embed
+        self.n_heads = n_heads
+        self.lagrangian = lagrangian
+        self.transform_q = transform_q
+        self.transform_k = transform_k
+
+        kwargs_linear, self.kwargs_lagr, _ = filter_kwargs(nn.Linear.__init__, lagrangian, **kwargs)
+        kwargs_linear.setdefault('bias', False)
+        self.WQ = nn.Linear(n_embed_q, n_embed, **kwargs_linear)
+        self.WK = nn.Linear(n_embed_k, n_embed, **kwargs_linear)
+
+    def alignment(self, gq: Tensor, gk: Tensor) -> Tensor:
+
+        gq = self.transform_q(gq)
+        gk = self.transform_k(gk)
+
+        n_batch, n_tokens_q, n_embed_q = gq.shape
+        n_batch, n_tokens_k, n_embed_k = gk.shape
+        n_embed = self.n_embed
+        n_heads = self.n_heads
+
+        q = self.WQ(gq).view(n_batch, n_tokens_q, n_heads, n_embed // n_heads).transpose(1, 2)
+        k = self.WK(gk).view(n_batch, n_tokens_k, n_heads, n_embed // n_heads).transpose(1, 2)
+        a = q @ k.transpose(-1, -2)
+        return self.lagrangian(a, **self.kwargs_lagr)
