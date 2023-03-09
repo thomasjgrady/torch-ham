@@ -29,3 +29,11 @@ def conv_kernel_from_dim(dim: int):
         return nn.Conv2d
     elif dim == 3:
         return nn.Conv3d
+
+def conv_transpose_kernel_from_dim(dim: int):
+    if dim == 1:
+        return nn.ConvTranspose1d
+    elif dim == 2:
+        return nn.ConvTranspose2d
+    elif dim == 3:
+        return nn.ConvTranspose3d

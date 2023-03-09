@@ -16,6 +16,7 @@ class HAM(nn.Module):
                  neurons: Mapping[str, Neuron],
                  synapses: Mapping[str, Synapse],
                  connections: Mapping[str, List[str]],
+                 transforms: Mapping[Tuple[str, str], nn.Module] = defaultdict(lambda: nn.Identity()),
                  sensors: Mapping[str, nn.Module] = defaultdict(lambda: nn.Identity()),
                  outputs: Mapping[str, nn.Module] = defaultdict(lambda: nn.Identity())) -> None:
 
@@ -27,6 +28,11 @@ class HAM(nn.Module):
         self.sensors = nn.ModuleDict({ name: sensors[name] for name in neurons.keys() })
         self.outputs = nn.ModuleDict({ name: outputs[name] for name in neurons.keys() })
 
+        self.transforms = nn.ModuleDict()
+        for name in synapses.keys():
+            for neighbor in connections[name]:
+                self.transforms[f'{name}_{neighbor}'] = transforms[(name, neighbor)]
+
     def init_states(self,
                     mean: Mapping[str, float] = defaultdict(lambda: 0.0),
                     std: Mapping[str, float] = defaultdict(lambda: 0.02),
@@ -37,7 +43,7 @@ class HAM(nn.Module):
         Initializes neuron states using the given means and standard deviations
         for each neuron. Any identifiers present in `exclude` will be initialized
         to `None` (useful to avoid extra memory allocation in training loops where
-        a particular state in manually initialized).
+        a particular state is manually initialized).
         """
         return { name: None if name in exclude else neuron.init_state(
             mean[name],
@@ -73,7 +79,7 @@ class HAM(nn.Module):
         """
         energies = {}
         for name, synapse in self.synapses.items():
-            gs = [activations[neighbor] for neighbor in self.connections[name]]
+            gs = [self.transforms[f'{name}_{neighbor}'](activations[neighbor]) for neighbor in self.connections[name]]
             energies[name] = synapse.energy(*gs)
         return energies
 

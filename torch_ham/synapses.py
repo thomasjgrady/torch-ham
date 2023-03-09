@@ -1,5 +1,5 @@
 from .lagrangians import lagr_softmax
-from .utils import conv_kernel_from_dim, filter_kwargs
+from .utils import *
 from torch import Tensor
 from typing import *
 
@@ -39,6 +39,8 @@ class HopfieldWeight(nn.Module):
                  n_hid: int,
                  normalize: bool = True,
                  **kwargs) -> None:
+
+        super().__init__()
 
         self.W = nn.Parameter(torch.empty(n_in, n_hid, **kwargs))
         self.normalize = normalize
@@ -88,7 +90,7 @@ class GenericSynapse(Synapse):
         nb = h0.shape[0]
         return torch.mul(h0.view(nb, -1), h1.view(nb, -1)).sum(dim=1)
 
-def ConvSynapse(*args, **kwargs):
+def ConvSynapse(*args, transpose: bool = False, **kwargs):
     """
     Factory method for creating a pairwise alignment synapse using a
     convolutional operator.
@@ -96,10 +98,16 @@ def ConvSynapse(*args, **kwargs):
     
     kernel_size = kwargs['kernel_size'] if 'kernel_size' in kwargs else args[2]
     dim = len(kernel_size)
-    conv = conv_kernel_from_dim(dim)
+    if transpose:
+        conv = conv_transpose_kernel_from_dim(dim)
+    else:
+        conv = conv_kernel_from_dim(dim)
     conv_kwargs, _ = filter_kwargs(conv.__init__, **kwargs)
-
-    return GenericSynapse(conv(*args, **conv_kwargs), nn.Identity())
+    
+    if transpose:
+        return GenericSynapse(nn.Identity(), conv(*args, **conv_kwargs))
+    else:
+        return GenericSynapse(conv(*args, **conv_kwargs), nn.Identity())
 
 def DenseSynapse(*args, **kwargs):
     """
@@ -107,7 +115,7 @@ def DenseSynapse(*args, **kwargs):
     dense operator.
     """
     bias = kwargs.get('bias', False)
-    return GenericSynapse(nn.Linear(*args, bias=bias, **kwargs))
+    return GenericSynapse(nn.Linear(*args, bias=bias, **kwargs), nn.Identity())
 
 class AttentionSynapse(Synapse):
     """
@@ -119,8 +127,6 @@ class AttentionSynapse(Synapse):
                  n_embed: int,
                  n_heads: int,
                  lagrangian: Callable = lagr_softmax,
-                 transform_q: nn.Module = nn.Identity(),
-                 transform_k: nn.Module = nn.Identity(),
                  **kwargs) -> None:
 
         super().__init__()
@@ -128,8 +134,6 @@ class AttentionSynapse(Synapse):
         self.n_embed = n_embed
         self.n_heads = n_heads
         self.lagrangian = lagrangian
-        self.transform_q = transform_q
-        self.transform_k = transform_k
 
         kwargs_linear, self.kwargs_lagr, _ = filter_kwargs(nn.Linear.__init__, lagrangian, **kwargs)
         kwargs_linear.setdefault('bias', False)
@@ -137,9 +141,6 @@ class AttentionSynapse(Synapse):
         self.WK = nn.Linear(n_embed_k, n_embed, **kwargs_linear)
 
     def alignment(self, gq: Tensor, gk: Tensor) -> Tensor:
-
-        gq = self.transform_q(gq)
-        gk = self.transform_k(gk)
 
         n_batch, n_tokens_q, n_embed_q = gq.shape
         n_batch, n_tokens_k, n_embed_k = gk.shape
