@@ -3,6 +3,7 @@ from .utils import *
 from torch import Tensor
 from typing import *
 
+import itertools
 import torch
 import torch.nn as nn
 
@@ -139,6 +140,7 @@ class AttentionSynapse(Synapse):
         kwargs_linear.setdefault('bias', False)
         self.WQ = nn.Linear(n_embed_q, n_embed, **kwargs_linear)
         self.WK = nn.Linear(n_embed_k, n_embed, **kwargs_linear)
+        self.mix_heads = nn.Linear(n_heads, 1, **kwargs_linear)
 
     def alignment(self, gq: Tensor, gk: Tensor) -> Tensor:
 
@@ -149,5 +151,6 @@ class AttentionSynapse(Synapse):
 
         q = self.WQ(gq).view(n_batch, n_tokens_q, n_heads, n_embed // n_heads).transpose(1, 2)
         k = self.WK(gk).view(n_batch, n_tokens_k, n_heads, n_embed // n_heads).transpose(1, 2)
-        a = q @ k.transpose(-1, -2)
+        a = (q @ k.transpose(-1, -2)).transpose(1, -1)
+        a = self.mix_heads(a).transpose(1, -1)
         return self.lagrangian(a, **self.kwargs_lagr)

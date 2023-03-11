@@ -66,6 +66,23 @@ class ReluNeuron(Neuron):
     
     def lagrangian(self, x: Tensor) -> Tensor:
         return lagr_relu(x)
+    
+class SigmoidNeuron(Neuron):
+    """
+    Neuron representing sigmoid transformation with scale `scale` and
+    temperature `beta`
+    """
+
+    def __init__(self, shape: Union[int, Tuple[int]], scale: float = 1.0, beta: float = 1.0) -> None:
+        super().__init__(shape)
+        self.scale = scale
+        self.beta = beta
+
+    def activations(self, x: Tensor) -> Tensor:
+        return self.scale/(1+torch.exp(-self.beta*x))
+
+    def lagrangian(self, x: Tensor) -> Tensor:
+        return lagr_sigmoid(x, self.beta, self.scale)
 
 class SoftmaxNeuron(Neuron):
     """

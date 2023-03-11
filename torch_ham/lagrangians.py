@@ -14,6 +14,14 @@ def lagr_relu(x: Tensor) -> Tensor:
     """
     return (0.5*torch.relu(x)**2).flatten(start_dim=1).sum(dim=1)
 
+def lagr_sigmoid(x: Tensor, beta: float = 1.0, scale: float = 1.0) -> Tensor:
+    """
+    Lagrangian of sigmoid function.
+    """
+    return (scale/beta * torch.log(torch.exp(beta * x) + 1)) \
+        .flatten(start_dim=1) \
+        .sum(dim=1)
+
 def lagr_softmax(x: Tensor, beta: float = 1.0, dim: int = -1) -> Tensor:
     """
     Lagragian of softmax function.
