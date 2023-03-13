@@ -108,6 +108,7 @@ class HAM(nn.Module):
         order = sorted(states.keys())
         acts = [activations[name] for name in order]
         grads = torch.autograd.grad(synapse_energy, acts, torch.ones_like(synapse_energy), create_graph=create_graph)
+
         return { name: states[name] + g for name, g in zip(order, grads) }
 
     def step(self,
@@ -120,4 +121,4 @@ class HAM(nn.Module):
         step `states` towards a direction of minimal energy with corresponding step
         size `alpha`. If a state has identifier in `pin`, it will not be updated.
         """
-        return { name: state if name in pin else state - alpha*grads[name] for name, state in states.items() }
+        return { name: state if name in pin else state - alpha[name]*grads[name] for name, state in states.items() }
