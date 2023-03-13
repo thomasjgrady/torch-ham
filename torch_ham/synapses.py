@@ -45,6 +45,7 @@ class HopfieldWeight(nn.Module):
 
         self.W = nn.Parameter(torch.empty(n_in, n_hid, **kwargs))
         self.normalize = normalize
+        nn.init.xavier_normal_(self.W)
 
     def forward(self, g: Tensor) -> Tensor:
         W = self.W / torch.norm(self.W, dim=0, keepdim=True) if self.normalize else self.W
@@ -70,53 +71,31 @@ class HopfieldSynapse(Synapse):
     def alignment(self, *gs: Tensor) -> Tensor:
         hidval = torch.cat([w(g).unsqueeze(1) for w, g in zip(self.weights, gs)], dim=1).sum(dim=1)
         return self.lagrangian(hidval, **self.lagr_kwargs)
-
-class GenericSynapse(Synapse):
+    
+class ConvSynapse(Synapse):
     """
-    Generic pairwise alignment synapse. Takes two arbitrary functions `f0` and `f1`
-    and computes the alignment of `f0(g0)` and `f1(g1)` for activations `g0` and `g1`.
+    Convolutional synapse. If "transpose" is passed, a ConvTranspose will be
+    applied to the second argument instead of a normal Conv on the first.
     """
-
+    
     def __init__(self,
-                 f0: nn.Module,
-                 f1: nn.Module) -> None:
-
+                 *args,
+                 transpose: bool = False,
+                 **kwargs) -> None:
+        
         super().__init__()
-        self.f0 = f0
-        self.f1 = f1
-    
+
+        kernel_size = kwargs['kernel_size'] if 'kernel_size' in kwargs else args[2]
+        dim = len(kernel_size)
+        conv = conv_transpose_kernel_from_dim(dim) if transpose else conv_kernel_from_dim
+
+        self.conv = conv(*args, **kwargs)
+        self.f0 = nn.Identity() if transpose else conv(*args, **kwargs)
+        self.f1 = conv(*args, **kwargs) if transpose else nn.Identity()
+
     def alignment(self, g0: Tensor, g1: Tensor) -> Tensor:
-        h0 = self.f0(g0)
-        h1 = self.f1(g1)
-        nb = h0.shape[0]
-        return torch.mul(h0.view(nb, -1), h1.view(nb, -1)).sum(dim=1)
-
-def ConvSynapse(*args, transpose: bool = False, **kwargs):
-    """
-    Factory method for creating a pairwise alignment synapse using a
-    convolutional operator.
-    """
-    
-    kernel_size = kwargs['kernel_size'] if 'kernel_size' in kwargs else args[2]
-    dim = len(kernel_size)
-    if transpose:
-        conv = conv_transpose_kernel_from_dim(dim)
-    else:
-        conv = conv_kernel_from_dim(dim)
-    conv_kwargs, _ = filter_kwargs(conv.__init__, **kwargs)
-    
-    if transpose:
-        return GenericSynapse(nn.Identity(), conv(*args, **conv_kwargs))
-    else:
-        return GenericSynapse(conv(*args, **conv_kwargs), nn.Identity())
-
-def DenseSynapse(*args, **kwargs):
-    """
-    Factory method for creating a pairwise alignment synapse using a
-    dense operator.
-    """
-    bias = kwargs.get('bias', False)
-    return GenericSynapse(nn.Linear(*args, bias=bias, **kwargs), nn.Identity())
+        h0, h1 = self.f0(g0), self.f1(g1)
+        return torch.mul(h0.view(g0.shape[0], -1), h1.view(g1.shape[0], -1)).sum(dim=1)
 
 class AttentionSynapse(Synapse):
     """

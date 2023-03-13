@@ -29,3 +29,6 @@ def lagr_softmax(x: Tensor, beta: float = 1.0, dim: int = -1) -> Tensor:
     return 1/beta*torch.logsumexp(beta*x, dim=dim, keepdim=True) \
         .flatten(start_dim=1) \
         .sum(dim=1)
+
+def lagr_spherical_norm(x: Tensor, dim: int = -1, eps: float = 1e-7) -> Tensor:
+    return torch.norm(x, dim=dim, keepdim=True).view(x.shape[0], -1).sum(dim=1)

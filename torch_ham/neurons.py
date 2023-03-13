@@ -100,3 +100,20 @@ class SoftmaxNeuron(Neuron):
 
     def lagrangian(self, x: Tensor) -> Tensor:
         return lagr_softmax(x, self.beta, self.dim)
+    
+class SphericalNormNeuron(Neuron):
+    """
+    Neuron representing spherical norm transformation.
+    """
+    def __init__(self, shape: Union[int, Tuple[int]], dim: int = -1, eps: float = 1e-7) -> None:
+        super().__init__(shape)
+        self.dim = dim
+        self.eps = eps
+
+    def activations(self, x: Tensor) -> Tensor:
+        x = x - torch.mean(x, dim=self.dim, keepdim=True)
+        x = x / (torch.norm(x, dim=self.dim, keepdim=True) + self.eps)
+        return x
+    
+    def lagrangian(self, x: Tensor) -> Tensor:
+        return lagr_spherical_norm(x, dim=self.dim, eps=self.eps)
