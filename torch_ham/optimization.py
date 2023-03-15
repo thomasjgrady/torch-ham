@@ -5,13 +5,13 @@ from torch import Tensor
 from typing import *
 import torch
 
-def gradient_descent_step(model: HAM,
-                          states: Mapping[str, Tensor],
-                          alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
-                          pin: Set[str] = set(),
-                          create_graph: bool = True) -> Dict[str, Tensor]:
+def energy_descent_step(model: HAM,
+                        states: Mapping[str, Tensor],
+                        alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
+                        pin: Set[str] = set(),
+                        create_graph: bool = True) -> Dict[str, Tensor]:
     """
-    Performs a single step of the backprop through time algorithm. By default,
+    Performs a single step of descending the model's energy function. By default,
     assumes that we are in trainmode, so `create_graph` is set to true.
     """
     activations = model.activations(states)
@@ -19,23 +19,23 @@ def gradient_descent_step(model: HAM,
     states = model.step(states, grads, alpha, pin)
     return states
 
-def gradient_descent(model: HAM,
-                     states: Mapping[str, Tensor],
-                     max_iter: int,
-                     alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
-                     pin: Set[str] = set(),
-                     tol: float = 1e-3,
-                     create_graph: bool = True,
-                     return_history: bool = False) -> Dict[str, Tensor]:
+def energy_descent(model: HAM,
+                   states: Mapping[str, Tensor],
+                   max_iter: int,
+                   alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
+                   pin: Set[str] = set(),
+                   tol: float = 1e-3,
+                   create_graph: bool = True,
+                   return_history: bool = False) -> Dict[str, Tensor]:
     """
-    Performs at most `max_iter` steps of the backprop through time algorithm. Stopping
+    Performs at most `max_iter` steps of energy descent, stopping
     early if the states no longer change.
     """
     if return_history:
         history = [states]
 
     for t in range(max_iter):
-        states_next = gradient_descent_step(
+        states_next = energy_descent_step(
             model,
             states,
             alpha=alpha,
@@ -75,7 +75,7 @@ class DEQFixedPoint(torch.autograd.Function):
 
         # Compute fixed point
         with torch.enable_grad():
-            z_star = gradient_descent(
+            z_star = energy_descent(
                 model,
                 states,
                 max_iter=max_iter,
@@ -87,7 +87,7 @@ class DEQFixedPoint(torch.autograd.Function):
 
             # Engage autograd
             z0 = { name: z.detach().clone().requires_grad_() for name, z in z_star.items() }
-            f0 = gradient_descent_step(model, states, alpha=alpha, pin=pin, create_graph=True)
+            f0 = energy_descent_step(model, z_star, alpha=alpha, pin=pin, create_graph=True)
 
         ctx.order = list(sorted(z0.keys()))
         ctx.z0_sorted = [z0[name] for name in ctx.order]
@@ -108,13 +108,16 @@ class DEQFixedPoint(torch.autograd.Function):
         #   (I − ∂f(z*,θ)/∂z*)⁻ᵀy ≈ (∂f(z*,θ)/∂z*)ᵀy
         #
         with torch.enable_grad():
-            # `z0_sorted` is detached from the rest of the graph, so derivatives will
-            # not propagate beyond it in `autograd.backward`
-            torch.autograd.backward(ctx.f0_sorted, y, retain_graph=True)
+
+            # Compute the jtvp dz = (I − ∂f(z*,θ)/∂z*)⁻ᵀy ≈ (∂f(z*,θ)/∂z*)ᵀy
+            dz = torch.autograd.grad(ctx.f0_sorted, ctx.z0_sorted, y, retain_graph=True)
+
+            # Compute the jtvp dθ = (∂f(z*,θ)/∂θ)ᵀdz. Note that in torch, you use
+            # stateful `autograd.backward` to compute this quantity!
+            torch.autograd.backward(ctx.f0_sorted, ctx.z0_sorted, dz)
         
-        grads = [None, None]
+        grads = [None, None, None, None, None, None]
         grads.extend([z.grad for z in ctx.z0_sorted])
-        grads.extend([None, None, None, None, None])
         return tuple(grads)
     
 def deq_fixed_point(model: HAM,
