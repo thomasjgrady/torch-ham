@@ -3,139 +3,147 @@ from .ham import HAM
 from collections import defaultdict
 from torch import Tensor
 from typing import *
+
+import numpy as np
 import torch
 
 def energy_descent_step(model: HAM,
                         states: Mapping[str, Tensor],
+                        activations: Mapping[str, Tensor],
                         alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
                         pin: Set[str] = set(),
-                        create_graph: bool = True) -> Dict[str, Tensor]:
+                        create_graph: bool = True,
+                        noise_scale:Optional[float] = None) -> Dict[str, Tensor]:
     """
     Performs a single step of descending the model's energy function. By default,
     assumes that we are in trainmode, so `create_graph` is set to true.
     """
-    activations = model.activations(states)
     grads = model.grads(states, activations, create_graph=create_graph)
+    if noise_scale is not None:
+        for name in grads.keys():
+            grads[name] = grads[name] + noise_scale*torch.randn_like(grads[name])
     states = model.step(states, grads, alpha, pin)
-    return states
+    return states, model.activations(states)
 
 def energy_descent(model: HAM,
                    states: Mapping[str, Tensor],
-                   max_iter: int,
+                   activations: Mapping[str, Tensor],
+                   max_iter: int = 100,
                    alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
                    pin: Set[str] = set(),
                    tol: float = 1e-3,
                    create_graph: bool = True,
-                   return_history: bool = False) -> Dict[str, Tensor]:
+                   return_history: bool = False,
+                   noise_scale: Optional[float] = None) -> Dict[str, Tensor]:
     """
     Performs at most `max_iter` steps of energy descent, stopping
     early if the states no longer change.
     """
     if return_history:
-        history = [states]
+        history_s = [states]
+        history_a = [activations]
 
     for t in range(max_iter):
-        states_next = energy_descent_step(
+        states_next, activations_next = energy_descent_step(
             model,
             states,
+            activations,
             alpha=alpha,
             pin=pin,
-            create_graph=create_graph
+            create_graph=create_graph,
+            noise_scale=noise_scale
         )
+        if return_history:
+            history_s.append(states_next)
+            history_a.append(activations_next)
         with torch.no_grad():
-            residuals = [states_next[name] - states[name] for name in states.keys()]
+            residuals = [activations_next[name] - activations[name] for name in activations.keys()]
+        states, activations = states_next, activations_next
+        with torch.no_grad():
             if all([torch.all(torch.abs(r) < tol) for r in residuals]):
                 break
-        states = states_next
-        if return_history:
-            history.append(states)
 
     if return_history:
-        return history
-    return states
+        return history_s, history_a
+    return states, activations
 
-class DEQFixedPoint(torch.autograd.Function):
-    """
-    Computes fixed point and uses a first-order Neumann approximation to compute
-    implicit derivative.
-    """
-
-    @staticmethod
-    def forward(ctx: Any,
-                model: HAM,
-                order: Iterable[str],
-                max_iter: int,
-                alpha: Mapping[str, float],
-                pin: Set[str],
-                tol: float,
-                *states: Tensor) -> Tuple[Tensor]:
-        
-        # Autograd functions cannot take dicts as input
-        states = { name: s for name, s in zip(order, states) }        
-
-        # Compute fixed point
-        with torch.enable_grad():
-            z_star = energy_descent(
-                model,
-                states,
-                max_iter=max_iter,
-                alpha=alpha,
-                pin=pin,
-                tol=tol,
-                create_graph=False
-            )
-
-            # Engage autograd
-            z0 = { name: z.detach().clone().requires_grad_() for name, z in z_star.items() }
-            f0 = energy_descent_step(model, z_star, alpha=alpha, pin=pin, create_graph=True)
-
-        ctx.order = list(sorted(z0.keys()))
-        ctx.z0_sorted = [z0[name] for name in ctx.order]
-        ctx.f0_sorted = [f0[name] for name in ctx.order]
-
-        return tuple([z_star[name] for name in order])
-    
-    @staticmethod
-    def backward(ctx: Any, *y: Tensor) -> Tuple[Tensor]:
-
-        # Implicit derivative gives JVP
-        # 
-        #   (∂z*/∂θ)ᵀy = (∂f(z*,θ)/∂θ)ᵀ(I − ∂f(z*,θ)/∂z*)⁻ᵀy
-        # 
-        # However, we can approximate (I − ∂f(z*,θ)/∂z*)⁻ᵀy by a first-order
-        # Neumann approximation as simply
-        #
-        #   (I − ∂f(z*,θ)/∂z*)⁻ᵀy ≈ (∂f(z*,θ)/∂z*)ᵀy
-        #
-        with torch.enable_grad():
-
-            # Compute the jtvp dz = (I − ∂f(z*,θ)/∂z*)⁻ᵀy ≈ (∂f(z*,θ)/∂z*)ᵀy
-            dz = torch.autograd.grad(ctx.f0_sorted, ctx.z0_sorted, y, retain_graph=True)
-
-            # Compute the jtvp dθ = (∂f(z*,θ)/∂θ)ᵀdz. Note that in torch, you use
-            # stateful `autograd.backward` to compute this quantity!
-            torch.autograd.backward(ctx.f0_sorted, ctx.z0_sorted, dz)
-        
-        grads = [None, None, None, None, None, None]
-        grads.extend([z.grad for z in ctx.z0_sorted])
-        return tuple(grads)
-    
 def deq_fixed_point(model: HAM,
-                    states: Dict[str, Tensor],
+                    states: Mapping[str, Tensor],
+                    activations: Mapping[str, Tensor],
                     max_iter: int = 100,
                     alpha: Mapping[str, float] = defaultdict(lambda: 1.0),
                     pin: Set[str] = set(),
-                    tol: float = 1e-3) -> Dict[str, Tensor]:
-    
-    order = list(sorted(states.keys()))
-    states_sorted = [states[name] for name in order]
-    fixed_points_sorted = DEQFixedPoint.apply(
+                    tol: float = 1e-3,
+                    noise_scale: Optional[float] = None) -> Dict[str, Tensor]:
+    """
+    Computes the fixed point of energy descent and uses a first-order Neumann
+    approximation to compute the gradient.
+    """
+
+    # Compute the fixed point function
+    states, activations = energy_descent(
         model,
-        order,
-        max_iter,
-        alpha,
-        pin,
-        tol,
-        *states_sorted
+        states,
+        activations,
+        max_iter=max_iter,
+        alpha=alpha,
+        pin=pin,
+        tol=tol,
+        create_graph=False,
+        return_history=False,
+        noise_scale=noise_scale
     )
-    return { name: x for name, x in zip(order, fixed_points_sorted) }
+
+    # Re-engage autograd
+    states, activations = energy_descent_step(
+        model,
+        { name: s.detach().requires_grad_() for name, s in states.items() },
+        { name: a.detach().requires_grad_() for name, a in activations.items() },
+        alpha=alpha,
+        pin=pin,
+        create_graph=True,
+        noise_scale=noise_scale
+    )
+    
+    # Create an intermediate state for activations so that a backward hook can
+    # be added
+    order = list(sorted(activations.keys()))
+    batch_size = activations[order[0]].shape[0]
+    g_vec = torch.cat([activations[name].view(batch_size, -1) for name in order], dim=1)
+    
+    shapes = [activations[name].shape for name in order]
+    splits = [np.prod(s[1:]) for s in shapes]
+    g_out = { name: gs.reshape(s) for name, gs, s in zip(order, torch.split(g_vec, splits, dim=1), shapes) }
+
+    # Compute single step at fixed point
+    s0 = { name: s.detach().requires_grad_() for name, s in states.items() }
+    g0 = { name: g.detach().requires_grad_() for name, g in activations.items() }
+    s1, g1 = energy_descent_step(
+        model, s0, g0, alpha=alpha, pin=pin, create_graph=True, noise_scale=noise_scale
+    )
+
+    g0_sorted = [g0[name] for name in order]
+    g1_sorted = [g1[name] for name in order]
+
+    # By the implict function theorem, we have that
+    #
+    #   (∂g*/∂θ)ᵀy = (∂f(g*,x)/∂θ)ᵀy(I − ∂f(g*,x)/g*)⁻ᵀy
+    #
+    # However, we can use a first-order Neumann approximation to the second
+    # term to get
+    #
+    #   (∂g*/∂θ)ᵀy ≈ (∂f(g*,x)/∂θ)ᵀy(I + (∂f(g*,x)/g*)ᵀ)y
+    #
+    # See https://arxiv.org/pdf/2111.05177.pdf for details
+    #
+    # Note: This means that ALL loss terms must act on the activations,
+    # NOT the model hidden states!
+    def backward_hook(y: Tensor):
+        batch_size = y.shape[0]
+        y_sorted = [ys.reshape(s) for ys, s in zip(torch.split(y, splits, dim=1), shapes)]
+        dfdg = torch.autograd.grad(g1_sorted, g0_sorted, y_sorted)
+        return torch.cat([(yi + di).view(batch_size, -1) for yi, di in zip(y_sorted, dfdg)], dim=1)
+
+    g_vec.register_hook(backward_hook)
+
+    return states, g_out
