@@ -97,29 +97,42 @@ class ConvSynapse(Synapse):
         h0, h1 = self.f0(g0), self.f1(g1)
         return torch.mul(h0.view(g0.shape[0], -1), h1.view(g1.shape[0], -1)).sum(dim=1)
 
+class DenseSynapse(Synapse):
+
+    def __init__(self, m: int, n: int, **kwargs) -> None:
+        super().__init__()
+        self.W = nn.Parameter(torch.empty(m, n, **kwargs))
+        nn.init.xavier_normal_(self.W)
+
+    def alignment(self, g0: Tensor, g1: Tensor) -> Tensor:
+        return (g0 @ self.W @ g1).view(g0.shape[0], -1)
+
 class AttentionSynapse(Synapse):
     """
-    Generic non-causal attention alignment.
+    Generic attention synapse with optional causality.
     """
     def __init__(self,
                  n_embed_q: int,
                  n_embed_k: int,
                  n_embed: int,
                  n_heads: int,
-                 lagrangian: Callable = lagr_softmax,
+                 ctx_width: int = -1,
                  **kwargs) -> None:
 
         super().__init__()
 
         self.n_embed = n_embed
         self.n_heads = n_heads
-        self.lagrangian = lagrangian
 
-        kwargs_linear, self.kwargs_lagr, _ = filter_kwargs(nn.Linear.__init__, lagrangian, **kwargs)
-        kwargs_linear.setdefault('bias', False)
-        self.WQ = nn.Linear(n_embed_q, n_embed, **kwargs_linear)
-        self.WK = nn.Linear(n_embed_k, n_embed, **kwargs_linear)
-        self.mix_heads = nn.Linear(n_heads, 1, **kwargs_linear)
+        self.WQ = nn.Linear(n_embed_q, n_embed, **kwargs)
+        self.WK = nn.Linear(n_embed_k, n_embed, **kwargs)
+        
+        self.causal = ctx_width > -1
+        if self.causal:
+            self.mask = torch.tril(torch.ones(ctx_width, ctx_width, device=kwargs.get('device', 'cpu'), dtype=torch.long)) \
+                .view(1, 1, ctx_width, ctx_width)
+
+        self.mix_heads = nn.Linear(n_heads, 1, **kwargs)
 
     def alignment(self, gq: Tensor, gk: Tensor) -> Tensor:
 
@@ -130,6 +143,10 @@ class AttentionSynapse(Synapse):
 
         q = self.WQ(gq).view(n_batch, n_tokens_q, n_heads, n_embed // n_heads).transpose(1, 2)
         k = self.WK(gk).view(n_batch, n_tokens_k, n_heads, n_embed // n_heads).transpose(1, 2)
+
         a = (q @ k.transpose(-1, -2)).transpose(1, -1)
+        if self.causal:
+            a = torch.masked_fill(a, self.mask[:,:,:n_tokens_q,:n_tokens_k] == 0, float('-inf'))
+
         a = self.mix_heads(a).transpose(1, -1)
-        return self.lagrangian(a, **self.kwargs_lagr)
+        return lagr_softmax(a)
