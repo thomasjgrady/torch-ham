@@ -105,7 +105,7 @@ class DenseSynapse(Synapse):
         nn.init.xavier_normal_(self.W)
 
     def alignment(self, g0: Tensor, g1: Tensor) -> Tensor:
-        return (g0 @ self.W @ g1).view(g0.shape[0], -1)
+        return (g0 @ self.W @ g1).view(g0.shape[0], -1).sum(dim=1)
 
 class AttentionSynapse(Synapse):
     """
@@ -132,8 +132,6 @@ class AttentionSynapse(Synapse):
             self.mask = torch.tril(torch.ones(ctx_width, ctx_width, device=kwargs.get('device', 'cpu'), dtype=torch.long)) \
                 .view(1, 1, ctx_width, ctx_width)
 
-        self.mix_heads = nn.Linear(n_heads, 1, **kwargs)
-
     def alignment(self, gq: Tensor, gk: Tensor) -> Tensor:
 
         n_batch, n_tokens_q, n_embed_q = gq.shape
@@ -144,9 +142,8 @@ class AttentionSynapse(Synapse):
         q = self.WQ(gq).view(n_batch, n_tokens_q, n_heads, n_embed // n_heads).transpose(1, 2)
         k = self.WK(gk).view(n_batch, n_tokens_k, n_heads, n_embed // n_heads).transpose(1, 2)
 
-        a = (q @ k.transpose(-1, -2)).transpose(1, -1)
+        a = (q @ k.transpose(-1, -2))
         if self.causal:
             a = torch.masked_fill(a, self.mask[:,:,:n_tokens_q,:n_tokens_k] == 0, float('-inf'))
 
-        a = self.mix_heads(a).transpose(1, -1)
         return lagr_softmax(a)
