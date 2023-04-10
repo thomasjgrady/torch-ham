@@ -1,34 +1,22 @@
 from torch import Tensor
+from typing import *
 
+import numpy as np
 import torch
 
-def lagr_identity(x: Tensor) -> Tensor:
-    """
-    Lagragian of identity function.
-    """
-    return (0.5*x**2).flatten(start_dim=1).sum(dim=1)
+def lagr_layer_norm(x: Tensor,
+                    dim: int = -1,
+                    eps: float = 1e-5,
+                    gamma: Tensor = 1.0,
+                    delta: Tensor = 0.0) -> Tensor:
 
-def lagr_relu(x: Tensor) -> Tensor:
-    """
-    Lagragian of ReLU function.
-    """
-    return (0.5*torch.relu(x)**2).flatten(start_dim=1).sum(dim=1)
+    b = x.shape[0]
+    D = np.prod([x.shape[d] for d in np.atleast_1d(dim)])
+    mu = torch.mean(x, dim=-1, keepdim=True)
+    xm = x - mu
+    std = torch.sqrt(torch.var(xm, dim=-1, keepdim=True) + eps)
+    return (D*gamma*std + delta*x).view(b, -1).sum()
 
-def lagr_sigmoid(x: Tensor, beta: float = 1.0, scale: float = 1.0) -> Tensor:
-    """
-    Lagrangian of sigmoid function.
-    """
-    return (scale/beta * torch.log(torch.exp(beta * x) + 1)) \
-        .flatten(start_dim=1) \
-        .sum(dim=1)
-
-def lagr_softmax(x: Tensor, beta: float = 1.0, dim: int = -1) -> Tensor:
-    """
-    Lagragian of softmax function.
-    """
-    return 1/beta*torch.logsumexp(beta*x, dim=dim, keepdim=True) \
-        .flatten(start_dim=1) \
-        .sum(dim=1)
-
-def lagr_spherical_norm(x: Tensor, dim: int = -1, eps: float = 1e-7) -> Tensor:
-    return torch.norm(x, dim=dim, keepdim=True).view(x.shape[0], -1).sum(dim=1)
+def lagr_softmax(x: Tensor, dim: int = -1, beta: float = 1.0) -> Tensor:
+    b = x.shape[0]
+    return torch.logsumexp(x, dim=dim, keepdim=True).view(b, -1).sum(dim=1)
